@@ -28,7 +28,7 @@ warnings.filterwarnings("ignore")
 # CONFIG
 # ============================================================
 
-DATA_FOLDER = "."
+DATA_FOLDER = "data"
 
 plt.switch_backend("Agg")
 
