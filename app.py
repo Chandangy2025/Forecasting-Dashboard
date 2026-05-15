@@ -1,271 +1,297 @@
-# ============================================================
-# INSTALL REQUIRED LIBRARIES
-# ============================================================
-# Run this in VS Code terminal first:
-#
-# py -m pip install streamlit pandas numpy matplotlib statsmodels
-#
-# Then run app:
-#
-# py -m streamlit run app.py
-#
-# ============================================================
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-
 from itertools import product
 from statsmodels.tsa.statespace.sarimax import SARIMAX
-
 import warnings
 import os
 
 warnings.filterwarnings("ignore")
 
-# ============================================================
-# CONFIG
-# ============================================================
-
 DATA_FOLDER = "data"
 
 plt.switch_backend("Agg")
 
-st.set_page_config(
-    page_title="MedTech Forecast Dashboard",
-    layout="wide"
-)
-
-# ============================================================
-# BUILD FOLDER STRUCTURE
-# ============================================================
+# ============================
+# Build folder structure
+# ============================
 
 folder_map = {}
 
 for company in os.listdir(DATA_FOLDER):
 
-    company_path = os.path.join(DATA_FOLDER, company)
+    cp = os.path.join(DATA_FOLDER, company)
 
-    if os.path.isdir(company_path):
-
-        if company.startswith("."):
-            continue
+    if os.path.isdir(cp):
 
         folder_map[company] = {}
 
-        for region in os.listdir(company_path):
+        for region in os.listdir(cp):
 
-            region_path = os.path.join(company_path, region)
+            rp = os.path.join(cp, region)
 
-            if os.path.isdir(region_path):
+            if os.path.isdir(rp):
 
                 therapy_dict = {}
 
-                for item in os.listdir(region_path):
+                for item in os.listdir(rp):
 
-                    item_path = os.path.join(region_path, item)
+                    ip = os.path.join(rp, item)
 
-                    # ============================================
-                    # THERAPY AREA FOLDER
-                    # ============================================
+                    if os.path.isdir(ip):
 
-                    if os.path.isdir(item_path):
-
-                        csv_files = [
+                        files = [
 
                             f.replace(".csv", "")
 
-                            for f in os.listdir(item_path)
+                            for f in os.listdir(ip)
 
                             if f.endswith(".csv")
 
                         ]
 
-                        if csv_files:
+                        if files:
 
-                            therapy_dict[item] = csv_files
-
-                # ============================================
-                # REGION WITH THERAPY
-                # ============================================
+                            therapy_dict[item] = files
 
                 if therapy_dict:
 
                     folder_map[company][region] = therapy_dict
 
-                # ============================================
-                # REGION WITH DIRECT CSV
-                # ============================================
-
                 else:
 
-                    csv_files = [
+                    files = [
 
                         f.replace(".csv", "")
 
-                        for f in os.listdir(region_path)
+                        for f in os.listdir(rp)
 
                         if f.endswith(".csv")
 
                     ]
 
-                    if csv_files:
+                    folder_map[company][region] = {
 
-                        folder_map[company][region] = {
+                        "_no_therapy": files
 
-                            "_no_therapy": csv_files
+                    }
 
-                        }
-
-# ============================================================
-# HELPER FUNCTIONS
-# ============================================================
+# ============================
+# Helpers
+# ============================
 
 def get_companies():
 
-    return sorted(list(folder_map.keys()))
+    return list(folder_map.keys())
 
 
-def get_regions(company):
+def get_regions(c):
 
-    return sorted(list(folder_map.get(company, {}).keys()))
-
-
-def get_therapy_areas(company, region):
-
-    if company not in folder_map:
-        return []
-
-    if region not in folder_map[company]:
-        return []
-
-    therapy_dict = folder_map[company][region]
-
-    if "_no_therapy" in therapy_dict:
-        return []
-
-    return sorted(list(therapy_dict.keys()))
+    return list(folder_map.get(c, {}).keys())
 
 
-def get_devices(company, region, therapy=None):
+def get_therapy_areas(c, r):
 
-    if company not in folder_map:
-        return []
+    d = folder_map[c][r]
 
-    if region not in folder_map[company]:
-        return []
-
-    therapy_dict = folder_map[company][region]
-
-    if "_no_therapy" in therapy_dict:
-
-        return therapy_dict["_no_therapy"]
-
-    if therapy:
-
-        return therapy_dict.get(therapy, [])
-
-    return []
+    return [] if "_no_therapy" in d else list(d.keys())
 
 
-def get_file_path(company, region, device, therapy=None):
+def get_devices(c, r, t=None):
 
-    if therapy:
+    d = folder_map[c][r]
+
+    if "_no_therapy" in d:
+
+        return d["_no_therapy"]
+
+    return d.get(t, [])
+
+
+def get_file_path(c, r, d, t=None):
+
+    if t:
 
         return os.path.join(
+
             DATA_FOLDER,
-            company,
-            region,
-            therapy,
-            device + ".csv"
+            c,
+            r,
+            t,
+            d + ".csv"
+
         )
 
     return os.path.join(
+
         DATA_FOLDER,
-        company,
-        region,
-        device + ".csv"
+        c,
+        r,
+        d + ".csv"
+
     )
 
-# ============================================================
-# LOAD SERIES
-# ============================================================
+# ============================
+# COMMON DATA CLEANING FIX
+# ============================
 
-def load_series(file_path):
+def load_and_clean(fp):
 
-    df = pd.read_csv(file_path)
+    df = pd.read_csv(fp)
 
     df["Date"] = pd.to_datetime(
+
         df["Date"],
-        format="%d-%m-%Y",
         errors="coerce"
+
     )
 
-    df = df.groupby("Date", as_index=False).agg({
+    # ==================================
+    # HANDLE DUPLICATE DATES
+    # ==================================
 
-    "Sales": "sum",
+    df = df.groupby("Date").agg({
 
-    "GrowthRate": "mean"
+        "Sales": "sum",
 
-    })
+        "GrowthRate": "mean"
 
-
-    df = df.dropna(
-        subset=["Date", "Sales", "GrowthRate"]
-    )
+    }).reset_index()
 
     df = df.sort_values("Date")
 
     df = df.set_index("Date")
 
-    ts_q = df["Sales"].asfreq("QE").astype(float).dropna()
+    ts = df["Sales"].asfreq("QE").astype(float).dropna()
 
     exog = df["GrowthRate"].asfreq("QE").astype(float).dropna()
 
-    return df, ts_q, exog
+    return ts, exog
 
-# ============================================================
-# MODEL TRAINING
-# ============================================================
+# ============================
+# Optimized dropdown
+# ============================
 
-def get_best_model(train_data, train_exog, model_type):
+def optimized_region_update(c, r):
 
-    best_aic = np.inf
+    if not c or not r:
 
-    best_order = None
+        return [], [], False
 
-    best_seasonal = (0, 0, 0, 0)
+    t_list = get_therapy_areas(c, r)
 
-    best_model = None
+    if t_list:
 
-    # ========================================================
-    # SARIMAX
-    # ========================================================
+        d_list = get_devices(c, r, t_list[0])
 
-    if model_type == "SARIMAX":
+        return t_list, d_list, True
 
-        s = 4
+    else:
+
+        d_list = get_devices(c, r)
+
+        return [], d_list, False
+
+# ============================
+# EVALUATION
+# ============================
+
+def evaluate_dashboard(c, r, t, d, model_type):
+
+    try:
+
+        fp = get_file_path(c, r, d, t)
+
+        ts, exog = load_and_clean(fp)
+
+        TEST_Q = 4
+
+        if len(ts) <= TEST_Q + 2:
+
+            return pd.DataFrame({
+
+                "Error": ["Dataset too small"]
+
+            }), None
+
+        train = ts.iloc[:-TEST_Q]
+
+        test = ts.iloc[-TEST_Q:]
+
+        train_exog = exog.iloc[:-TEST_Q]
+
+        test_exog = exog.iloc[-TEST_Q:]
+
+        best_aic = np.inf
+
+        best_model = None
 
         p = d = q = range(0, 2)
 
-        P = D = Q = range(0, 2)
+        # ==================================
+        # SARIMAX
+        # ==================================
 
-        for (pi, di, qi) in product(p, d, q):
+        if model_type == "SARIMAX":
 
-            for (Pi, Di, Qi) in product(P, D, Q):
+            P = D = Q = range(0, 2)
+
+            s = 4
+
+            for (pi, di, qi) in product(p, d, q):
+
+                for (Pi, Di, Qi) in product(P, D, Q):
+
+                    try:
+
+                        m = SARIMAX(
+
+                            train,
+
+                            exog=train_exog,
+
+                            order=(pi, di, qi),
+
+                            seasonal_order=(Pi, Di, Qi, s),
+
+                            trend="c",
+
+                            enforce_stationarity=False,
+
+                            enforce_invertibility=False
+
+                        ).fit(disp=False)
+
+                        if m.aic < best_aic:
+
+                            best_aic = m.aic
+
+                            best_model = m
+
+                    except:
+
+                        pass
+
+        # ==================================
+        # ARIMAX
+        # ==================================
+
+        else:
+
+            for (pi, di, qi) in product(p, d, q):
 
                 try:
 
-                    model = SARIMAX(
+                    m = SARIMAX(
 
-                        train_data,
+                        train,
 
                         exog=train_exog,
 
                         order=(pi, di, qi),
 
-                        seasonal_order=(Pi, Di, Qi, s),
+                        seasonal_order=(0, 0, 0, 0),
 
                         trend="c",
 
@@ -273,559 +299,452 @@ def get_best_model(train_data, train_exog, model_type):
 
                         enforce_invertibility=False
 
-                    )
+                    ).fit(disp=False)
 
-                    res = model.fit(disp=False)
+                    if m.aic < best_aic:
 
-                    if res.aic < best_aic:
+                        best_aic = m.aic
 
-                        best_aic = res.aic
+                        best_model = m
+
+                except:
+
+                    pass
+
+        pred = best_model.get_forecast(
+
+            steps=len(test),
+
+            exog=test_exog
+
+        ).predicted_mean
+
+        acc = 100 - (
+
+            abs(test - pred)
+
+            / test * 100
+
+        )
+
+        accuracy_df = pd.DataFrame({
+
+            "Actual": test,
+
+            "Predicted": pred,
+
+            "Accuracy %": acc
+
+        })
+
+        # ==================================
+        # PLOT
+        # ==================================
+
+        fig, ax = plt.subplots(
+
+            figsize=(12, 6)
+
+        )
+
+        train.plot(ax=ax, label="Training")
+
+        test.plot(ax=ax, label="Testing")
+
+        pred.plot(ax=ax, label="Predicted")
+
+        ax.legend()
+
+        ax.set_title(
+
+            f"{d} Evaluation"
+
+        )
+
+        return accuracy_df, fig
+
+    except Exception as e:
+
+        return pd.DataFrame({
+
+            "Error": [str(e)]
+
+        }), None
+
+# ============================
+# FORECAST MODEL
+# ============================
+
+def run_forecast_model(fp, model_type, horizon):
+
+    ts, exog = load_and_clean(fp)
+
+    if len(ts) < 6:
+
+        return None
+
+    best_aic = np.inf
+
+    best_order = None
+
+    best_seasonal = (0, 0, 0, 0)
+
+    p = d = q = range(0, 2)
+
+    # ==================================
+    # SARIMAX
+    # ==================================
+
+    if model_type == "SARIMAX":
+
+        P = D = Q = range(0, 2)
+
+        s = 4
+
+        for (pi, di, qi) in product(p, d, q):
+
+            for (Pi, Di, Qi) in product(P, D, Q):
+
+                try:
+
+                    m = SARIMAX(
+
+                        ts,
+
+                        exog=exog,
+
+                        order=(pi, di, qi),
+
+                        seasonal_order=(Pi, Di, Qi, s)
+
+                    ).fit(disp=False)
+
+                    if m.aic < best_aic:
+
+                        best_aic = m.aic
 
                         best_order = (pi, di, qi)
 
                         best_seasonal = (Pi, Di, Qi, s)
 
-                        best_model = res
-
                 except:
+
                     pass
 
-    # ========================================================
+    # ==================================
     # ARIMAX
-    # ========================================================
+    # ==================================
 
     else:
-
-        p = d = q = range(0, 2)
 
         for (pi, di, qi) in product(p, d, q):
 
             try:
 
-                model = SARIMAX(
+                m = SARIMAX(
 
-                    train_data,
+                    ts,
 
-                    exog=train_exog,
+                    exog=exog,
 
                     order=(pi, di, qi),
 
-                    seasonal_order=(0, 0, 0, 0),
+                    seasonal_order=(0, 0, 0, 0)
 
-                    trend="c",
+                ).fit(disp=False)
 
-                    enforce_stationarity=False,
+                if m.aic < best_aic:
 
-                    enforce_invertibility=False
-
-                )
-
-                res = model.fit(disp=False)
-
-                if res.aic < best_aic:
-
-                    best_aic = res.aic
+                    best_aic = m.aic
 
                     best_order = (pi, di, qi)
 
-                    best_seasonal = (0, 0, 0, 0)
-
-                    best_model = res
-
             except:
+
                 pass
 
-    return best_model, best_order, best_seasonal
+    final_model = SARIMAX(
 
-# ============================================================
-# SINGLE DEVICE FORECAST
-# ============================================================
+        ts,
 
-def forecast_single_device(
+        exog=exog,
 
-    company,
-    region,
-    therapy,
-    device,
-    model_type,
-    horizon
+        order=best_order,
 
-):
+        seasonal_order=best_seasonal
 
-    try:
+    ).fit(disp=False)
 
-        file_path = get_file_path(
+    h = int(horizon)
 
-            company,
-            region,
-            device,
-            therapy
+    start = ts.index[-1] + pd.offsets.QuarterEnd()
 
-        )
+    future_idx = pd.date_range(
 
-        df, ts_q, exog = load_series(file_path)
+        start,
 
-        TEST_Q = 4
+        periods=h,
 
-        if len(ts_q) <= TEST_Q + 2:
+        freq="QE"
 
-            return None, None, None, None
+    )
 
-        # ====================================================
-        # TRAIN TEST SPLIT
-        # ====================================================
+    exog_model = SARIMAX(
 
-        train_data = ts_q.iloc[:-TEST_Q]
+        exog,
 
-        test_data = ts_q.iloc[-TEST_Q:]
+        order=(1, 0, 0)
 
-        train_exog = exog.iloc[:-TEST_Q]
+    ).fit(disp=False)
 
-        test_exog = exog.iloc[-TEST_Q:]
+    future_exog = exog_model.get_forecast(
 
-        # ====================================================
-        # MODEL SEARCH
-        # ====================================================
+        steps=h
 
-        best_model, best_order, best_seasonal = get_best_model(
+    ).predicted_mean
 
-            train_data,
-            train_exog,
-            model_type
+    fc = final_model.get_forecast(
 
-        )
+        steps=h,
 
-        # ====================================================
-        # TEST FORECAST
-        # ====================================================
+        exog=future_exog
 
-        test_forecast = best_model.get_forecast(
+    )
 
-            steps=len(test_data),
+    return pd.Series(
 
-            exog=test_exog
+        fc.predicted_mean,
 
-        )
+        index=future_idx
 
-        test_pred = pd.Series(
+    )
 
-            test_forecast.predicted_mean,
-
-            index=test_data.index
-
-        )
-
-        accuracy = 100 - (
-
-            abs(test_data - test_pred)
-
-            / test_data * 100
-
-        )
-
-        # ====================================================
-        # FUTURE FORECAST
-        # ====================================================
-
-        h = int(horizon)
-
-        start = ts_q.index[-1] + pd.offsets.QuarterEnd()
-
-        future_index = pd.date_range(
-
-            start,
-
-            periods=h,
-
-            freq="QE"
-
-        )
-
-        exog_model = SARIMAX(
-
-            exog,
-
-            order=(1, 0, 0)
-
-        )
-
-        exog_fit = exog_model.fit(disp=False)
-
-        future_exog = pd.Series(
-
-            exog_fit.get_forecast(
-
-                steps=h
-
-            ).predicted_mean,
-
-            index=future_index
-
-        )
-
-        final_model = SARIMAX(
-
-            ts_q,
-
-            exog=exog,
-
-            order=best_order,
-
-            seasonal_order=best_seasonal,
-
-            trend="c",
-
-            enforce_stationarity=False,
-
-            enforce_invertibility=False
-
-        ).fit(disp=False)
-
-        future_fc = final_model.get_forecast(
-
-            steps=h,
-
-            exog=future_exog
-
-        )
-
-        future_mean = future_fc.predicted_mean
-
-        # ====================================================
-        # CREATE FINAL TABLE
-        # ====================================================
-
-        results = []
-
-        # Historical
-        for dt, val in ts_q.items():
-
-            results.append([
-
-                company,
-                region,
-                therapy,
-                device,
-                dt.date(),
-                round(val, 2),
-                "Historical"
-
-            ])
-
-        # Test Predictions
-        for dt, val in test_pred.items():
-
-            results.append([
-
-                company,
-                region,
-                therapy,
-                device,
-                dt.date(),
-                round(val, 2),
-                "Test Prediction"
-
-            ])
-
-        # Forecast
-        for dt, val in future_mean.items():
-
-            results.append([
-
-                company,
-                region,
-                therapy,
-                device,
-                dt.date(),
-                round(val, 2),
-                "Forecast"
-
-            ])
-
-        final_df = pd.DataFrame(
-
-            results,
-
-            columns=[
-
-                "Company",
-                "Region",
-                "Therapy",
-                "Device",
-                "Date",
-                "Value",
-                "Type"
-
-            ]
-
-        )
-
-        # ====================================================
-        # PLOT
-        # ====================================================
-
-        fig, ax = plt.subplots(figsize=(12, 6))
-
-        train_data.plot(ax=ax, label="Training")
-
-        test_data.plot(ax=ax, label="Testing")
-
-        test_pred.plot(ax=ax, label="Test Prediction")
-
-        future_mean.plot(ax=ax, label="Future Forecast")
-
-        ax.legend()
-
-        ax.set_title(f"{device} Forecast")
-
-        return final_df, fig, accuracy.mean(), future_mean.iloc[-1]
-
-    except Exception as e:
-
-        st.error(str(e))
-
-        return None, None, None, None
-
-# ============================================================
+# ============================
 # FULL COMPANY FORECAST
-# ============================================================
+# ============================
 
-def forecast_full_company(
+def forecast_full_company(c, model, horizon):
 
-    company,
-    model_type,
-    horizon
+    results = []
 
-):
+    for r in get_regions(c):
 
-    all_results = []
+        t_list = get_therapy_areas(c, r)
 
-    summary_rows = []
-
-    company_regions = get_regions(company)
-
-    for region in company_regions:
-
-        therapy_list = get_therapy_areas(company, region)
-
-        # ====================================================
-        # NO THERAPY
-        # ====================================================
-
-        if len(therapy_list) == 0:
-
-            devices = get_devices(company, region)
-
-            for device in devices:
-
-                try:
-
-                    df, _, acc, latest_fc = forecast_single_device(
-
-                        company,
-                        region,
-                        None,
-                        device,
-                        model_type,
-                        horizon
-
-                    )
-
-                    if df is not None:
-
-                        all_results.append(df)
-
-                        summary_rows.append([
-
-                            company,
-                            region,
-                            "",
-                            device,
-                            round(acc, 2),
-                            round(latest_fc, 2)
-
-                        ])
-
-                except:
-                    pass
-
-        # ====================================================
+        # ==================================
         # WITH THERAPY
-        # ====================================================
+        # ==================================
 
-        else:
+        if t_list:
 
-            for therapy in therapy_list:
+            for t in t_list:
 
-                devices = get_devices(
+                for d in get_devices(c, r, t):
 
-                    company,
-                    region,
-                    therapy
-
-                )
-
-                for device in devices:
+                    fp = get_file_path(c, r, d, t)
 
                     try:
 
-                        df, _, acc, latest_fc = forecast_single_device(
+                        # ======================
+                        # HISTORICAL
+                        # ======================
 
-                            company,
-                            region,
-                            therapy,
-                            device,
-                            model_type,
+                        raw_df = pd.read_csv(fp)
+
+                        raw_df["Date"] = pd.to_datetime(
+
+                            raw_df["Date"],
+                            errors="coerce"
+
+                        )
+
+                        for _, row in raw_df.iterrows():
+
+                            results.append([
+
+                                c,
+                                r,
+                                t,
+                                d,
+                                row["Date"].date(),
+                                row["Sales"],
+                                "Historical"
+
+                            ])
+
+                        # ======================
+                        # FORECAST
+                        # ======================
+
+                        fc = run_forecast_model(
+
+                            fp,
+                            model,
                             horizon
 
                         )
 
-                        if df is not None:
+                        if fc is None:
 
-                            all_results.append(df)
+                            continue
 
-                            summary_rows.append([
+                        for dt, val in fc.items():
 
-                                company,
-                                region,
-                                therapy,
-                                device,
-                                round(acc, 2),
-                                round(latest_fc, 2)
+                            results.append([
+
+                                c,
+                                r,
+                                t,
+                                d,
+                                dt.date(),
+                                val,
+                                "Forecast"
 
                             ])
 
-                    except:
-                        pass
+                    except Exception as e:
 
-    # ========================================================
-    # FINAL OUTPUT
-    # ========================================================
+                        print(e)
 
-    if len(all_results) == 0:
+        # ==================================
+        # WITHOUT THERAPY
+        # ==================================
 
-        return None, None, None
+        else:
 
-    final_output = pd.concat(all_results)
+            for d in get_devices(c, r):
 
-    summary_df = pd.DataFrame(
+                fp = get_file_path(c, r, d)
 
-        summary_rows,
+                try:
 
-        columns=[
+                    raw_df = pd.read_csv(fp)
 
-            "Company",
-            "Region",
-            "Therapy",
-            "Device",
-            "Mean Accuracy %",
-            "Latest Forecast"
+                    raw_df["Date"] = pd.to_datetime(
 
-        ]
+                        raw_df["Date"],
+                        errors="coerce"
 
-    )
+                    )
 
-    output_file = "full_company_forecast.csv"
+                    for _, row in raw_df.iterrows():
 
-    final_output.to_csv(
+                        results.append([
 
-        output_file,
+                            c,
+                            r,
+                            "NA",
+                            d,
+                            row["Date"].date(),
+                            row["Sales"],
+                            "Historical"
 
-        index=False
+                        ])
 
-    )
+                    fc = run_forecast_model(
 
-    return final_output, summary_df, output_file
+                        fp,
+                        model,
+                        horizon
 
-# ============================================================
+                    )
+
+                    if fc is None:
+
+                        continue
+
+                    for dt, val in fc.items():
+
+                        results.append([
+
+                            c,
+                            r,
+                            "NA",
+                            d,
+                            dt.date(),
+                            val,
+                            "Forecast"
+
+                        ])
+
+                except Exception as e:
+
+                    print(e)
+
+    df = pd.DataFrame(results, columns=[
+
+        "Company",
+        "Region",
+        "Therapy",
+        "Device",
+        "Date",
+        "Value",
+        "Type"
+
+    ])
+
+    file = "full_company_forecast.csv"
+
+    df.to_csv(file, index=False)
+
+    return df, file
+
+# ============================
+# STREAMLIT PAGE
+# ============================
+
+st.set_page_config(
+
+    page_title="MedTech Forecast Dashboard",
+
+    layout="wide"
+
+)
+
+# ============================
 # TITLE
-# ============================================================
+# ============================
 
 st.title(
-    "📈 MedTech Enterprise Forecasting Dashboard"
+
+    "📈 MedTech Forecasting Dashboard"
+
 )
 
 st.markdown("---")
 
-# ============================================================
-# SIDEBAR
-# ============================================================
+# ============================
+# TABS
+# ============================
 
-st.sidebar.header("Forecast Settings")
+tab1, tab2 = st.tabs([
 
-companies = get_companies()
+    "Model Evaluation",
+    "Company Forecast"
 
-if len(companies) == 0:
+])
 
-    st.error("No company folders found.")
+# ============================
+# TAB 1
+# ============================
 
-    st.stop()
+with tab1:
 
-# ============================================================
-# MODE
-# ============================================================
-
-mode = st.sidebar.radio(
-
-    "Select Forecast Mode",
-
-    [
-
-        "Single Device Forecast",
-
-        "Full Company Forecast"
-
-    ]
-
-)
-
-# ============================================================
-# MODEL
-# ============================================================
-
-model = st.sidebar.selectbox(
-
-    "Select Forecast Model",
-
-    ["SARIMAX", "ARIMAX"]
-
-)
-
-# ============================================================
-# HORIZON
-# ============================================================
-
-horizon = st.sidebar.slider(
-
-    "Forecast Horizon (Quarters)",
-
-    1,
-    48,
-    4
-
-)
-
-# ============================================================
-# SINGLE DEVICE MODE
-# ============================================================
-
-if mode == "Single Device Forecast":
+    st.sidebar.header("Evaluation Settings")
 
     company = st.sidebar.selectbox(
 
-        "Select Company",
+        "Company",
 
-        companies
+        get_companies()
 
     )
 
-    regions = get_regions(company)
-
     region = st.sidebar.selectbox(
 
-        "Select Region",
+        "Region",
 
-        regions
+        get_regions(company)
 
     )
 
@@ -838,11 +757,11 @@ if mode == "Single Device Forecast":
 
     therapy = None
 
-    if len(therapy_list) > 0:
+    if therapy_list:
 
         therapy = st.sidebar.selectbox(
 
-            "Select Therapy Area",
+            "Therapy",
 
             therapy_list
 
@@ -858,183 +777,136 @@ if mode == "Single Device Forecast":
 
     device = st.sidebar.selectbox(
 
-        "Select Device",
+        "Device",
 
         devices
 
     )
 
-    run_btn = st.sidebar.button(
+    model = st.sidebar.selectbox(
 
-        "Run Device Forecast"
+        "Model",
+
+        ["SARIMAX", "ARIMAX"]
 
     )
 
-    if run_btn:
+    if st.sidebar.button("Evaluate Model"):
 
         with st.spinner(
 
-            "Running Forecast..."
+            "Running Evaluation..."
 
         ):
 
-            result_df, fig, acc, latest_fc = forecast_single_device(
+            out, fig = evaluate_dashboard(
 
                 company,
                 region,
                 therapy,
                 device,
-                model,
+                model
+
+            )
+
+        st.subheader("Accuracy Output")
+
+        st.dataframe(
+
+            out,
+
+            use_container_width=True
+
+        )
+
+        if fig:
+
+            st.pyplot(fig)
+
+# ============================
+# TAB 2
+# ============================
+
+with tab2:
+
+    st.sidebar.header("Company Forecast Settings")
+
+    comp2 = st.sidebar.selectbox(
+
+        "Forecast Company",
+
+        get_companies(),
+
+        key="fc"
+
+    )
+
+    model2 = st.sidebar.selectbox(
+
+        "Forecast Model",
+
+        ["SARIMAX", "ARIMAX"],
+
+        key="m2"
+
+    )
+
+    horizon = st.sidebar.slider(
+
+        "Forecast Horizon",
+
+        1,
+        48,
+        4,
+
+        key="h2"
+
+    )
+
+    if st.sidebar.button(
+
+        "Run Full Company Forecast"
+
+    ):
+
+        with st.spinner(
+
+            "Running Full Forecast..."
+
+        ):
+
+            table, file = forecast_full_company(
+
+                comp2,
+                model2,
                 horizon
 
             )
 
-        if result_df is not None:
+        st.success(
 
-            st.success(
+            "Forecast Completed"
 
-                "Forecast Completed"
+        )
 
-            )
+        st.dataframe(
 
-            col1, col2 = st.columns(2)
+            table,
 
-            col1.metric(
+            use_container_width=True
 
-                "Mean Accuracy %",
+        )
 
-                round(acc, 2)
-
-            )
-
-            col2.metric(
-
-                "Latest Forecast",
-
-                round(latest_fc, 2)
-
-            )
-
-            st.subheader(
-
-                "Forecast Output"
-
-            )
-
-            st.dataframe(
-
-                result_df,
-
-                use_container_width=True
-
-            )
-
-            st.subheader(
-
-                "Visualization"
-
-            )
-
-            st.pyplot(fig)
-
-            csv = result_df.to_csv(index=False)
+        with open(file, "rb") as f:
 
             st.download_button(
 
-                "📥 Download CSV",
+                "Download Forecast CSV",
 
-                csv,
+                f,
 
-                file_name="device_forecast.csv",
+                file_name=file,
 
                 mime="text/csv"
 
             )
-
-# ============================================================
-# FULL COMPANY MODE
-# ============================================================
-
-else:
-
-    company = st.sidebar.selectbox(
-
-        "Select Company",
-
-        companies
-
-    )
-
-    run_btn = st.sidebar.button(
-
-        "Run Full Company Forecast"
-
-    )
-
-    if run_btn:
-
-        with st.spinner(
-
-            "Running Full Company Forecast..."
-
-        ):
-
-            final_output, summary_df, output_file = forecast_full_company(
-
-                company,
-                model,
-                horizon
-
-            )
-
-        if final_output is not None:
-
-            st.success(
-
-                "Full Company Forecast Completed"
-
-            )
-
-            st.subheader(
-
-                "Forecast Summary"
-
-            )
-
-            st.dataframe(
-
-                summary_df,
-
-                use_container_width=True
-
-            )
-
-            st.subheader(
-
-                "Full Historical + Test + Forecast Output"
-
-            )
-
-            st.dataframe(
-
-                final_output,
-
-                use_container_width=True,
-
-                height=600
-
-            )
-
-            with open(output_file, "rb") as f:
-
-                st.download_button(
-
-                    label="📥 Download Full Company Forecast CSV",
-
-                    data=f,
-
-                    file_name="full_company_forecast.csv",
-
-                    mime="text/csv"
-
-                )
